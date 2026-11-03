@@ -8,8 +8,8 @@ viện trong `requirements.txt`.
 Mở PowerShell tại thư mục project và chạy:
 
 ```powershell
-python --version
-python -m pip --version
+py --version
+py -m pip --version
 ```
 
 Nếu máy không nhận lệnh `python`, cài Python từ trang chính thức và bật tùy
@@ -18,8 +18,8 @@ chọn **Add Python to PATH** trong quá trình cài.
 ## 2. Cài project
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m pip install -e .
+py -m pip install -r requirements.txt
+py -m pip install -e .
 ```
 
 - Lệnh đầu cài dependency cần thiết như NumPy và pytest.
@@ -29,8 +29,8 @@ python -m pip install -e .
 Kiểm tra:
 
 ```powershell
-python -c "import game2048, numpy, tkinter; print('Cài đặt thành công')"
-python -m pytest -q
+py -c "import game2048, numpy, tkinter; print('Cài đặt thành công')"
+py -m pytest -q
 ```
 
 ## 3. Virtual environment — không bắt buộc
@@ -38,10 +38,10 @@ python -m pytest -q
 Nếu muốn tách thư viện của project khỏi Python hệ thống:
 
 ```powershell
-python -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m pip install -e .
+py -m pip install -r requirements.txt
+py -m pip install -e .
 ```
 
 Thoát môi trường bằng `deactivate`. Có thể dùng Conda thay cho `venv`, nhưng
@@ -50,8 +50,8 @@ tên môi trường không quan trọng và không ảnh hưởng việc chấm.
 ## 4. Chạy lần đầu
 
 ```powershell
-python scripts/play.py --seed 42
-python scripts/benchmark_agent.py --agent student.agent:Agent --seeds 1 --start-seed 42 --total-time-sec 5
+py scripts/play.py --seed 42
+py scripts/benchmark_agent.py --agent student.agent:Agent --seeds 1 --start-seed 42 --total-time-sec 5
 ```
 
 ## 5. Lỗi thường gặp

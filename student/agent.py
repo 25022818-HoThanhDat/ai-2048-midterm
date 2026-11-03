@@ -15,18 +15,201 @@ from game2048.types import Move
 
 class Agent:
     # Đổi tên này thành tên đội; nó sẽ xuất hiện trong UI và file kết quả.
-    name = "starter-one-ply"
+    name = "student-agent"
 
     def reset(self, seed: int | None = None) -> None:
         """Xóa cache/trạng thái giữa hai ván nếu thuật toán của bạn có dùng."""
+        self.calculated_lines.clear()
+        self.evaluated_boards.clear()
+
+    def __init__(self) -> None:
+        """Khởi tạo trạng thái của agent. Không cần thiết phải reset() ở đây."""
+        self.evaluated_lines = {
+        
+        }
+        # list of tuple of (monotonicity_penalty, smoothness_penalty) for each evaluated lines
+        self.evaluated_boards = {
+
+        }
+        self.reset()
+
+    def evaluate_line(self, line: np.ndarray) -> tuple[float, float]:
+        """Calculates (monotonicity, smoothness) penalties for a single row or column.
+        
+        Ignores empty cells (0s) and caches results in self.evaluated_lines.
+
+        if not hasattr(self, "evaluated_lines"):
+            self.evaluated_lines: dict[tuple[int, ...], tuple[float, float]] = {}
+        """
+        # Extract non-zero tile values
+        active_tiles = line[line > 0.1]
+
+        # Cast to Python ints to prevent float precision duplicates in dict keys
+        cache_key = tuple(int(round(x)) for x in active_tiles)
+
+        # 1. Return cached result if available
+        if cache_key in self.evaluated_lines:
+            return self.evaluated_lines[cache_key]
+
+        # 2. Compute penalties if line has fewer than 2 active tiles
+        if len(active_tiles) <= 1:
+            result = (0.0, 0.0)
+            self.evaluated_lines[cache_key] = result
+            return result
+
+        # 3. Calculate Monotonicity & Smoothness
+        diffs = np.diff(active_tiles)
+
+        left_to_right = np.sum(diffs[diffs > 0])
+        right_to_left = np.sum(-diffs[diffs < 0])
+        monotonicity_penalty = -float(min(left_to_right, right_to_left))
+
+        smoothness_penalty = -float(np.sum(np.abs(diffs)))
+
+        result = (monotonicity_penalty, smoothness_penalty)
+
+        # 4. Save to cache and return
+        self.evaluated_lines[cache_key] = result
+        return result
+
+    def calculate_monotonicity(log2_board: np.ndarray) -> float:
+        """Calculates monotonicity while ignoring empty spaces (0s)."""
+        total_monotonicity = 0.0
+
+        # 1. Check Row Monotonicity
+        for r in range(4):
+            # Filter out 0s to get only active tiles in this row
+            row = log2_board[r, log2_board[r, :] > 0]
+            if len(row) > 1:
+                diffs = np.diff(row)
+                left_to_right = np.sum(diffs[diffs > 0])
+                right_to_left = np.sum(-diffs[diffs < 0])
+                total_monotonicity -= min(left_to_right, right_to_left)
+
+        # 2. Check Column Monotonicity
+        for c in range(4):
+            # Filter out 0s to get only active tiles in this column
+            col = log2_board[log2_board[:, c] > 0, c]
+            if len(col) > 1:
+                diffs = np.diff(col)
+                top_to_bottom = np.sum(diffs[diffs > 0])
+                bottom_to_top = np.sum(-diffs[diffs < 0])
+                total_monotonicity -= min(top_to_bottom, bottom_to_top)
+
+        return total_monotonicity
+
+    def calculate_smoothness(log2_board: np.ndarray) -> float:
+        """Calculates smoothness while ignoring empty spaces (0s)."""
+        smoothness = 0.0
+
+        # Check Row Smoothness
+        for r in range(4):
+            row = log2_board[r, log2_board[r, :] > 0]
+            if len(row) > 1:
+                diffs = np.diff(row)
+                smoothness -= np.sum(np.abs(diffs))
+
+        # Check Column Smoothness
+        for c in range(4):
+            col = log2_board[log2_board[:, c] > 0, c]
+            if len(col) > 1:
+                diffs = np.diff(col)
+                smoothness -= np.sum(np.abs(diffs))
+
+        return smoothness
 
     @staticmethod
-    def evaluate(board: np.ndarray, merge_score: int) -> float:
-        """Heuristic mẫu; hãy thay bằng thiết kế của nhóm."""
-        empty_cells = int(np.count_nonzero(board == 0))
-        largest_tile = int(board.max())
-        return 250.0 * empty_cells + merge_score + 0.1 * largest_tile
+    def evaluate(board: np.ndarray, merge_score: int, time_remaining_ms: float = float('inf')) -> dict[str, float]:
+        W = {
+            "snake": 0.1,
+            "empty": 3.0,
+            "smooth": 0.5,
+            "monotonicity": 1.0,
+            "merge": 0.5,
+            "corner": 1.0,
+        }
+        
+        snake_matrix_weight = np.array([
+            [15, 14, 13, 12],
+            [ 8,  9, 10, 11],
+            [ 7,  6,  5,  4],
+            [ 0,  1,  2,  3],
+        ]).T
+        
+        log2_board = np.zeros_like(board, dtype=float)
+        valid_mask = (board > 0) & (~np.isnan(board))
+        log2_board[valid_mask] = np.log2(board[valid_mask])
 
+        snake_val = np.linalg.norm(log2_board * snake_matrix_weight, ord=1)
+        empty_cells = int(np.count_nonzero(board == 0))
+        #largest_tile = int(board.max()) if board.size > 0 else 0
+        monotonicity_val = Agent.calculate_monotonicity(log2_board)
+        smoothness_val = Agent.calculate_smoothness(log2_board)
+        merge_val = np.log2(max(1, merge_score))
+
+        #corner bonus: check if the largest tile is in a corner
+        max_pos = np.unravel_index(np.argmax(board), board.shape)
+        if max_pos == (0, 0):  # Top-left corner
+            corner_bonus = 20.0 #* np.max(log2_board)
+        else:
+            corner_bonus = -10.0 #* np.max(log2_board)  # Heavy penalty for pulling max tile out of corner
+
+
+        scores = {
+            "snake": snake_val * W["snake"],
+            "empty": empty_cells * W["empty"],
+            #"largest": np.log2(largest_tile) * W["largest"], # Tip: Consider using np.log2(largest_tile) here!
+            "merge": merge_val * W["merge"],
+            "monotonicity": monotonicity_val * W["monotonicity"],
+            "smooth": smoothness_val * W["smooth"],
+            "corner": corner_bonus * W["corner"],
+        }
+        scores["total"] = sum(scores.values())
+        return scores
+    
+    def expectimax_step(self, next_board: np.ndarray, merge_score: int, time_remaining_ms: float) -> dict[str, float]:
+        """Evaluates board state using an Expectimax chance node if board space is tight
+
+        and remaining time permits. Returns a detailed dictionary breakdown.
+        """
+        empty_coords = np.argwhere(next_board == 0)
+        num_empty = len(empty_coords)
+
+        # Condition: Half or less board empty (<= 12 empty cells) AND time > 2500ms
+        if num_empty <= 12 and time_remaining_ms > 2500.0 and num_empty > 0:
+            cell_prob = 1.0 / num_empty
+
+            # 1. Evaluate first spawn to get dictionary keys
+            board_2_init = next_board.copy()
+            board_2_init[empty_coords[0][0], empty_coords[0][1]] = 2
+            sample_dict = self.evaluate(board_2_init, merge_score)
+
+            # 2. Initialize expected_value dict with 0.0 for all keys
+            expected_value = {key: 0.0 for key in sample_dict.keys()}
+
+            # 3. Accumulate weighted scores across all empty cells
+            for r, c in empty_coords:
+                board_with_2 = next_board.copy()
+                board_with_2[r, c] = 2
+                val_2 = self.evaluate(board_with_2, merge_score)
+
+                board_with_4 = next_board.copy()
+                board_with_4[r, c] = 4
+                val_4 = self.evaluate(board_with_4, merge_score)
+
+                # Element-wise addition for every component key
+                for key in expected_value:
+                    expected_value[key] += cell_prob * (0.9 * val_2[key] + 0.1 * val_4[key])
+
+            # 4. Set depth metadata tag
+            expected_value["expectimax_max_depth"] = 1
+            return expected_value
+
+        # Direct evaluation (depth = 0)
+        res_dict = self.evaluate(next_board, merge_score)
+        res_dict["expectimax_max_depth"] = 0
+        return res_dict
+    
     def choose_move(self, obs: Observation, time_limit_ms: float) -> Move:
         """Trả về đúng một phần tử ``Move`` có trong ``obs.legal_moves``.
 
@@ -39,9 +222,20 @@ class Agent:
 
         best_move = obs.legal_moves[0]
         best_value = float("-inf")
+
+        print("----------------------------------")
+        print(f"legal moves: {[move.name for move in obs.legal_moves]}")
+
         for move in obs.legal_moves:
             next_board, merge_score, _changed = move_board(obs.board, move)
-            value = self.evaluate(next_board, merge_score)
-            if value > best_value:
-                best_value, best_move = value, move
+            print(f"Next board for move {move.name}:\n{next_board}\nMerge score: {merge_score}")
+
+            value = self.expectimax_step(next_board, merge_score, obs.time_remaining_ms)
+            if isinstance(value, float):
+                value = {"total": value}
+
+            print(f"Move {move.name}: Total={value['total']:.2f} | Breakdown: {value}")
+            
+            if value["total"] > best_value:
+                best_value, best_move = value["total"], move
         return best_move

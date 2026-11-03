@@ -19,3 +19,5 @@ results/*.jsonl
 /scripts/precompute_pdb.py
 /tests/test_boss*.py
 
+/tmp/
+
