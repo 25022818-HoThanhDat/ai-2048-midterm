@@ -20,4 +20,5 @@ results/*.jsonl
 /tests/test_boss*.py
 
 /tmp/
+/results/
 

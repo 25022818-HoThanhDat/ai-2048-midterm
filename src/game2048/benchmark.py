@@ -66,12 +66,13 @@ def run_game(
             effective_limit_ms = 50.0
         observation = game.observe(remaining_ms, total_budget_ms)
         before = time.perf_counter_ns()
-        try:
-            action = agent.choose_move(observation, effective_limit_ms)
-        except Exception as exc:  # benchmark boundary intentionally catches submissions
+        #try:
+        action = agent.choose_move(observation, effective_limit_ms)
+        """except Exception as exc:  # benchmark boundary intentionally catches submissions
             exceptions += 1
             failure = f"choose_move: {type(exc).__name__}: {exc}"
-            break
+            print(failure)
+            break"""
         elapsed_ms = (time.perf_counter_ns() - before) / 1_000_000
         decision_times.append(elapsed_ms)
         if hasattr(agent, "last_nodes"):
