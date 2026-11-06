@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from game2048.observation import Observation
-from game2048.rules import move_board
+from game2048.rules import move_board, legal_moves
 from game2048.types import Move
 
 
@@ -256,49 +256,137 @@ class Agent:
         scores["total"] = sum(scores.values())
 
         return scores
-    
-    def expectimax_step(self, next_board: np.ndarray, merge_score: int, time_remaining_ms: float) -> dict[str, float]:
-        """Evaluates board state using an Expectimax chance node if board space is tight
 
-        and remaining time permits. Returns a detailed dictionary breakdown.
-        """
-        empty_coords = np.argwhere(next_board == 0)
+    def chanced_evaluate(
+        self, 
+        board: np.ndarray, 
+        merge_score: int, 
+        time_remaining_ms: float, 
+        depth: int,
+        _indent: int = 0
+    ) -> dict[str, float]:
+        """Chance Node: Computes expected evaluation across prospective tile spawns."""
+        prefix = "  " * _indent
+        #print(f"{prefix}[CHANCE] Entering Depth {depth} | Empty cells: {np.count_nonzero(board == 0)}")
+
+        # Fix: Correct self method call (removed extra 'self' argument)
+        if depth <= 0:
+            val = self.evaluate(self, board, merge_score, time_remaining_ms)
+            #print(f"{prefix}[LEAF] Base depth reached (0). Returning total score: {val['total']:.2f}")
+            return val
+
+        empty_coords = np.argwhere(board == 0)
         num_empty = len(empty_coords)
 
-        # Condition: Half or less board empty (<= 12 empty cells) AND time > 2500ms
-        if num_empty <= 12 and time_remaining_ms > 2500.0 and num_empty > 0:
-            cell_prob = 1.0 / num_empty
+        # Terminal check
+        if num_empty == 0 and not self.has_valid_merges(board):
+            #print(f"{prefix}[TERMINAL] Full board with no valid merges detected!")
+            return {
+                "snake": 0.0,
+                "empty": -100000.0,
+                "merge": 0.0,
+                "monotonicity": 0.0,
+                "smooth": 0.0,
+                "corner": 0.0,
+                "total": -100000.0
+            }
 
-            # 1. Evaluate first spawn to get dictionary keys
-            board_2_init = next_board.copy()
-            board_2_init[empty_coords[0][0], empty_coords[0][1]] = 2
-            sample_dict = self.evaluate(self, board_2_init, merge_score)
+        if num_empty == 0:
+            val = self.evaluate(self, board, merge_score, time_remaining_ms)
+            #print(f"{prefix}[CHANCE] Full board with available merges. Score: {val['total']:.2f}")
+            return val
 
-            # 2. Initialize expected_value dict with 0.0 for all keys
-            expected_value = {key: 0.0 for key in sample_dict.keys()}
+        base_eval = self.evaluate(self, board, merge_score, time_remaining_ms)
+        p_spot = 1.0 / num_empty
+        expected_total = 0.0
+        eval_fours = (depth <= 1)
 
-            # 3. Accumulate weighted scores across all empty cells
-            for r, c in empty_coords:
-                board_with_2 = next_board.copy()
-                board_with_2[r, c] = 2
-                val_2 = self.evaluate(self, board_with_2, merge_score)
+        #print(f"{prefix}[CHANCE] Simulating {num_empty} spawn slots (eval_fours={eval_fours})...")
+        
+        #start_t = time.perf_counter()
 
-                board_with_4 = next_board.copy()
+        for i, (r, c) in enumerate(empty_coords, 1):
+            # 1. Simulate spawn of '2'
+            board_with_2 = board.copy()
+            board_with_2[r, c] = 2
+            res_2, _ = self.move_step(board_with_2, time_remaining_ms, depth - 1, _indent=_indent + 1)
+
+            if eval_fours:
+                # 2. Simulate spawn of '4'
+                board_with_4 = board.copy()
                 board_with_4[r, c] = 4
-                val_4 = self.evaluate(board_with_4, merge_score)
+                res_4, _ = self.move_step(board_with_4, time_remaining_ms, depth - 1, _indent=_indent + 1)
+                
+                spot_expected = 0.9 * res_2["total"] + 0.1 * res_4["total"]
+            else:
+                spot_expected = res_2["total"]
 
-                # Element-wise addition for every component key
-                for key in expected_value:
-                    expected_value[key] += cell_prob * (0.9 * val_2[key] + 0.1 * val_4[key])
+            expected_total += p_spot * spot_expected
 
-            # 4. Set depth metadata tag
-            expected_value["expectimax_max_depth"] = 1
-            return expected_value
+        #elapsed_ms = (time.perf_counter() - start_t) * 1000
+        #print(f"{prefix}[CHANCE] Depth {depth} completed in ms | Expected Total: {expected_total:.2f}")
 
-        # Direct evaluation (depth = 0)
-        res_dict = self.evaluate(next_board, merge_score)
-        res_dict["expectimax_max_depth"] = 0
-        return res_dict
+        result = dict(base_eval)
+        result["total"] = expected_total
+        return result
+
+
+    def move_step(
+        self, 
+        current_board: np.ndarray, 
+        time_remaining_ms: float, 
+        depth: int,
+        _indent: int = 0
+    ) -> tuple[dict[str, float], Move | None]:
+        """Max Node: Evaluates candidate directions and returns best (evaluation_dict, Move)."""
+        #prefix = "  " * _indent
+        #print(f"{prefix}[MAX] Evaluating candidate moves at Depth {depth}...")
+
+        best_eval: dict[str, float] | None = None
+        best_move: Move | None = None
+        max_total = -float("inf")
+        evaluated_moves = 0
+
+        for move in Move:
+            next_board, merge_score, changed = move_board(current_board, move)
+            if not changed:
+                #print(f"{prefix}  -> Move {move.name}: Invalid/No change (Skipped)")
+                continue
+
+            evaluated_moves += 1
+            #print(f"{prefix}  -> Move {move.name}: Valid! Branching into Chance node...")
+
+            # FIX: Decremented depth to depth - 1 to stop infinite recursion!
+            expected_eval = self.chanced_evaluate(
+                next_board, 
+                merge_score, 
+                time_remaining_ms, 
+                depth - 1, 
+                #_indent=_indent + 1
+            )
+
+            #print(f"{prefix}  -> Move {move.name} evaluated total score: {expected_eval['total']:.2f}")
+
+            if expected_eval["total"] > max_total:
+                max_total = expected_eval["total"]
+                best_eval = expected_eval
+                best_move = move
+
+        if best_move is None or best_eval is None:
+            #print(f"{prefix}[MAX] Game Over! No valid moves found at Depth {depth}.")
+            terminal_eval = {
+                "snake": 0.0,
+                "empty": -100000.0,
+                "merge": 0.0,
+                "monotonicity": 0.0,
+                "smooth": 0.0,
+                "corner": 0.0,
+                "total": -100000.0
+            }
+            return terminal_eval, None
+
+        #print(f"{prefix}[MAX] Depth {depth} Best Choice: Move {best_move.name} with score {max_total:.2f}")
+        return best_eval, best_move
     
     def choose_move(self, obs: Observation, time_limit_ms: float) -> Move:
         """Trả về đúng một phần tử ``Move`` có trong ``obs.legal_moves``.
@@ -310,26 +398,24 @@ class Agent:
         if not obs.legal_moves:
             raise ValueError("choose_move được gọi ở trạng thái kết thúc")
 
-        if obs.move_count <= 10:
+        if obs.move_count <= 5:
             stmo = Move.UP if Move.UP in obs.legal_moves else Move.LEFT if Move.LEFT in obs.legal_moves else obs.legal_moves[0]
             return stmo
 
-        best_move = obs.legal_moves[0]
-        best_value = float("-inf")
+        #best_move = obs.legal_moves[0]
+        #best_value = float("-inf")
 
         print("----------------------------------")
+        print("current board\n",obs.board)
         print(f"legal moves: {[move.name for move in obs.legal_moves]}")
 
-        for move in obs.legal_moves:
-            next_board, merge_score, _changed = move_board(obs.board, move)
-            print(f"Next board for move {move.name}:\n{next_board}\nMerge score: {merge_score}")
+        best_eval_dict, action_to_make = self.move_step(
+            obs.board, 
+            obs.time_remaining_ms, 
+            depth=2
+        )
 
-            value = self.evaluate(self, next_board, merge_score, obs.time_remaining_ms)
-            if isinstance(value, float):
-                value = {"total": value}
+        print(f"Best move {action_to_make.name} and best evaluation breakdown: {best_eval_dict}")
 
-            print(f"Move {move.name}: Total={value['total']:.2f} | Breakdown: {value}")
-            
-            if value["total"] > best_value:
-                best_value, best_move = value["total"], move
-        return best_move
+        # Execute action_to_make (e.g., Move.UP, Move.LEFT, etc.)
+        return action_to_make
